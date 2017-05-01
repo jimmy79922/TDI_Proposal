@@ -1,0 +1,183 @@
+---
+title: "TDI proposal"
+---
+
+## Chun-Ming (Jimmy) Chiu
+
+```{r, echo = FALSE, message=FALSE}
+require(ggplot2)
+library(knitr) #for kable
+require(gridExtra)
+require(reshape2)
+library(ggrepel)
+library(ggmap)
+require(dplyr) #for arrange data
+```
+
+```{r flight map, echo = FALSE}
+flights = read.csv("positive_full0418.csv")
+
+ori = flights %>%
+  group_by(ORIGIN) %>%
+  summarise(count = n())
+dest = flights %>%
+  group_by(DEST) %>%
+  summarise(count = n())
+colnames(ori)[1] = "IATA"
+colnames(dest)[1] = "IATA"
+
+total = rbind(ori, dest)
+hub = total %>%
+  group_by(IATA) %>%
+  summarise(Flights = sum(count))
+
+airports <- unique(c(levels(flights$ORIGIN)[flights$ORIGIN], levels(flights$DEST)[flights$DEST]))
+# coords <- geocode(airports)
+coords <- read.csv("coords.csv", header = TRUE, row.names = "X")
+
+airports <- data.frame(airport=airports, coords)
+
+flights <- merge(flights, airports, by.x="ORIGIN", by.y="airport")
+flights <- merge(flights, airports, by.x="DEST", by.y="airport")
+airports <- merge(airports, hub, by.x = "airport", by.y = "IATA")
+
+
+worldmap <- borders("usa", colour="#efede1", fill="#efede1") # create a layer of borders
+route_map = ggplot() + worldmap + 
+        geom_curve(data=flights, aes(x = lon.x, y = lat.x, xend = lon.y, yend = lat.y), col = "#b29e7d", size = 1, curvature = .2) + 
+        geom_point(data=airports, aes(x = lon, y = lat, size = Flights), col = "#970027") + 
+        geom_text_repel(data=airports, aes(x = lon, y = lat, label = airport), col = "black", size = 3, segment.color = NA) + 
+        theme(panel.background = element_rect(fill="white"), 
+              axis.line = element_blank(),
+              axis.text.x = element_blank(),
+              axis.text.y = element_blank(),
+              axis.ticks = element_blank(),
+              axis.title.x = element_blank(),
+              axis.title.y = element_blank(),
+              legend.position = "none")
+```
+
+```{r data setup, echo = FALSE}
+'%!in%' <- function(x,y)!('%in%'(x,y))
+positive = read.csv('positive_full0418.csv')
+negative = read.csv('negative_full0228-3.csv')
+negative = negative[,-2:-3]
+
+ori = unique(positive$ORI)
+dest = unique(positive$DEST)
+service = unique(factor(c(as.character(ori),as.character(dest))))
+
+# negative = filter(negative, DEST %!in% service | ORIGIN %!in% service)
+negative = group_by(negative, DEST, ORIGIN) %>%
+  sample_n(1)
+negative = as.data.frame(negative)
+```
+
+# 1.Introduction
+## 1.1 Objective
+The two questions that I attempt to answer are how to forecast new routes launched by low-cost carriers (LCC) and what key factors are supporting LCC to start a new route. In the coming future, I plan to implement various machine learning techniques to construct several models for prediction. Based on significant variables chosen by models, I will also focus on investigating key factors for making decisions.
+
+
+## 1.2 Motivation 
+A low-cost carrier or low-cost airline (LCC) is an airline that offers generally low fares in exchange for eliminating many traditional passenger services. Nowadays, in US domestic flight market, LCCs are occupying three places among the 7 biggest US airlines, such as Southwest Airlines, JetBule and Spirit Airlines. The success and sustainability of these LCCs are tied to their reaction towards competitors and decisions to enter multiple markets. 
+
+This project aims to forecast new routes launched by low-cost carriers and discover significant patterns of construction of networks of LCCs. The result of this project might either help LCCs find out potential routes or provide entry strategies of other competitors, which can be expected to result in increasing profitability of the LCC. This topic must be conducted by airlines or industrial consulting firms yearly. The detailed results, however, depend on internal data and are not published. We thus intend to collect the data from several open online sources, clean and transform the data as well as applied various machine learning algorithms to answer the questions above. 
+
+## 1.3 Background
+To narrow down the range of the project, we select Spirit Airlines (IATA: NK) as the target airline for two reasons. First, the timing of launching new routes by Spirit Airlines was entirely recorded by a flight route website, routesonline.com. Second, according to Business Insider, Spirit grew its capacity the fastest among U.S. carriers in 2014, indicating Spirit acquired successful entry strategies. 
+
+# 2.Methodology
+## 2.1 Dataset
+In 2011-2017, Spirit Airlines has launched 138 yearly scheduled domestic flights, meaning the size of positive samples is 138. Since an airline tends to make a decision in the year prior to the entry, the negative samples are collected from 2010 to 2016. If we gather the routes from every first quarter of 2010 to 2016, the negative dataset will contain 10891 routes. For the routes that might appear several times in the dataset, we sample one of them to represent the identical routes. As a result, the size of the negative dataset will be reduced to size of 2302. Since the Spirit Airlines is only the 7th largest U.S. carriers, the dataset is quite skew with 5.7% positive samples and 94.3% negative samples as in Table 1.
+
+```{r, echo = FALSE}
+p = nrow(positive)
+n = nrow(negative)
+df_size = data.frame(Size =  c(p, n), Porpotion = c(p/(n+p),n/(n+p)))
+rownames(df_size) = c("Positive", "Negative")
+kable(df_size, digits = 3, align = "c", caption = "Size of Dataset")
+```
+
+## 2.2 Assumptions
+
+Here we make several assumptions to construct the prediction models. First, a new entrant follows the previous entry patterns. Second, time slots of airports, aircraft deployment, and crews are available for launching a new route. Also, only non-stop flights are considered. Last, decisions to enter markets are independent of each other, no marketing strategies involved. 
+
+## 2.3 Variables
+
+We employ nine possible significant variables as below. Most of the data are aggregated corresponding the time when airlines tend to make the decisions the year before the entry. These data also adjusted into the quarter scope to alleviate missing data and uncertainty.
+
+1. **DIST**: distance between two origin and destination (miles)
+2. **RHHI**: HHI of routes (based on passengers and **if HHI = 0, RHHI = 20000**)
+3. **NLCC**: number of LCC operating (excluding Spirit Airlines)
+4. **NROUTE**: total number of routes Spirit operating in both origin and destination
+5. **DELAY**: sum of average of delay time in both origin and destination quarterly (mins)
+6. **SIZE**: sum of sizes of origin and destination airports (P = 0, M = 1, S = 2, N = 3)
+7. **POP**: population
+8. **INCOME**: median income
+9. **UNEMP**: unemployment rate
+- L: Large or Primary Airports, M: Medium Airports or Secondary Airports, S: Small Airports, N: Nonhub Primary
+
+The Herfindahl-Hirschman Index (HHI) is a commonly accepted measure of market concentration and can range from close to zero to 10,000. If the HHI is above 2500, the market is highly concentrated. In this paper, the RHHI will be set as 20000, if there is no player in a route.
+
+To obtain suitable demographic data for each airport, we define a circle centering at the airport with 110 miles radius (about 2 hours driving) as the catchment area and assumed that, beyond this area, customers are not willing to fly from this airport. Since the data comes in various incompatible sources, we employ several standards to reformat data, such as Federal Information Processing Standard (FIPS), Zipcode and latitude and longitude. Due to the imperfect of the transformation between Zipcode and FIPS, 7% of the area are missing. 
+
+```{r, echo = FALSE, fig.align="center", fig.cap="Route map of Spirit Airlines as of 2017"}
+route_map
+```
+
+In US domestic market, Spirit operates about 100 fleets and services scheduled flights to over 37 destinations. From the plot above, we can see that Spirit mainly operates on the east side of the US and prefers to fly between primary airports such as Atlantic City, Chicago-O'Hare, Dallas/Fort Worth, Detroit, Fort Lauderdale and Las Vegas.
+
+```{r, echo=FALSE, message=FALSE, fig.align = 'center'}
+his_DIST = ggplot(positive, aes(x = DIST)) +
+  geom_histogram()
+his_RHHI = ggplot(positive, aes(x = RHHI)) +
+  geom_histogram()
+his_ROUTE = ggplot(positive, aes(x = NROUTE)) +
+  geom_histogram()
+his_NLCC = ggplot(positive, aes(x = NLCC)) +
+  geom_histogram()
+his_DELAY = ggplot(positive, aes(x = DELAY)) +
+  geom_histogram()
+his_SIZE = ggplot(positive, aes(x = SIZE)) +
+  geom_histogram()
+his_POP = ggplot(positive, aes(x = POP)) +
+  geom_histogram()
+his_INCOME = ggplot(positive, aes(x = INCOME)) +
+  geom_histogram()
+his_UNEMP = ggplot(positive, aes(x = UNEMP)) +
+  geom_histogram()
+
+grid.arrange(his_DIST, his_RHHI,his_ROUTE, his_NLCC, his_DELAY, his_SIZE, his_POP, his_INCOME, his_UNEMP,  ncol=3)
+```
+
+From the exploratory data analysis, we can briefly conclude that Spirit Airlines tend to enter monopoly or new markets with distances between 500 and 1500, and few LCCs are operating. The **DELAY** and **INCOME** seem to follow normal distributions. And, it is hard to distinguish the features from **NROUTE**, **POP**, and **UNEMP** so far.
+
+
+# 3. Future Work
+
+In the coming future, I plan to complete two tasks. First, I will build models with entry time and implement various machine learning methods, such as SVM, decision tree or random forest to predict if Spirit Airlines will launch a new route at a particular time point. Second, I will also try to figure out key factors for entry a new market, based on significant variables chosen by models. 
+
+
+\newpage
+# 4.Data Sources
+1. Bureau of Transportation Statistics
+  - Airline On-Time Performance Data https://www.transtats.bts.gov/Fields.asp?Table_ID=236
+  - T-100 Domestic Segment (U.S. Carriers) https://www.transtats.bts.gov/Fields.asp?Table_ID=259
+
+2. Federal Aviation Administration
+  - Airport size category https://www.faa.gov/airports/planning_capacity/passenger_allcargo_stats/categories/
+
+3. Route online
+  - New route launched by Spirit Airlines http://www.routesonline.com/news/
+
+4. 2010 U.S. Census Bureau
+  - Population statistic https://www.census.gov/2010census/data/
+
+5. Bureau of Labor Statistics
+  - Income and unemployed rate https://www.bls.gov/data/
+
+# 5.References
+- The construction of a low cost airline network
+Kai Huschelrath-Kathrin Muller-Volodymyr Bilotkach - ZEW, Zentrum fur Europ. Wirtschaftsforschung - 2011
+
+
